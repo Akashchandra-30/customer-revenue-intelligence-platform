@@ -42,7 +42,7 @@ jobs:
         run: dbt docs generate --project-dir dbt --profiles-dir dbt --target local
         env:
           REVINTEL_DUCKDB_PATH: ${{ github.workspace }}/output/revintel.duckdb
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: pipeline-output
           path: |
