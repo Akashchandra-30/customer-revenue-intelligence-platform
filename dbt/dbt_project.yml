@@ -1,0 +1,47 @@
+name: revintel
+version: "2.0.0"
+config-version: 2
+profile: revintel
+
+model-paths: ["models"]
+snapshot-paths: ["snapshots"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+clean-targets: ["target", "dbt_packages", "logs"]
+
+vars:
+  incremental_lookback_days: 3     # reprocess CDC records ingested in the last N days
+  gross_margin: 0.35               # used for margin-based CLV
+  clv_horizon_months: 24
+  active_days: 90                  # lifecycle thresholds
+  lapsing_days: 180
+  date_spine_start: "2022-01-01"
+  date_spine_end: "2027-12-31"
+
+models:
+  revintel:
+    +persist_docs:
+      relation: "{{ target.type == 'snowflake' }}"
+      columns: "{{ target.type == 'snowflake' }}"
+    staging:
+      +materialized: view
+      +schema: staging
+    intermediate:
+      +materialized: view
+      +schema: staging
+    marts:
+      core:
+        +materialized: table
+        +schema: core
+      analytics:
+        +materialized: table
+        +schema: analytics
+
+snapshots:
+  revintel:
+    +schema: snapshots
+
+data_tests:
+  revintel:
+    +severity: error

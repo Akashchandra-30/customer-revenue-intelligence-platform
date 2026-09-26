@@ -1,65 +1,75 @@
-"""Project paths and environment-driven settings for Azure and Snowflake."""
+"""Project paths and typed, environment-driven settings.
+
+Values come from environment variables (or a local ``.env``). In Azure they are
+injected from Key Vault into the Container Apps job; nothing secret lives in code.
+"""
+
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
-try:
-    from dotenv import load_dotenv
+from pydantic import AliasChoices, Field, SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-    load_dotenv()
-except ImportError:  # python-dotenv is optional
-    pass
-
-ROOT = Path(__file__).resolve().parent.parent
+# REVINTEL_HOME lets an installed package (e.g. in the Docker image) find dbt/ and sql/
+ROOT = Path(os.getenv("REVINTEL_HOME", Path(__file__).resolve().parent.parent))
 DATA_DIR = ROOT / "data"
-RAW_DIR = DATA_DIR / "raw"
-CLEAN_DIR = DATA_DIR / "clean"
-REJECTS_DIR = DATA_DIR / "rejects"
+LANDING_DIR = DATA_DIR / "landing"  # source-system extracts as delivered
+LAKE_DIR = DATA_DIR / "lake"  # local mirror of the Azure container layout
 OUTPUT_DIR = ROOT / "output"
 SQL_DIR = ROOT / "sql"
+DBT_DIR = ROOT / "dbt"
 
 # Load order matters: parents before children.
 TABLES = ("fx_rates", "products", "customers", "orders", "order_items")
 
-
-def _require(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Missing required environment variable: {name} (see .env.example)")
-    return value
+Target = Literal["local", "dev", "prod"]
 
 
-@dataclass(frozen=True)
-class SnowflakeSettings:
-    account: str
-    user: str
-    password: str
-    role: str
-    warehouse: str
-    database: str
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=ROOT / ".env", extra="ignore", populate_by_name=True)
 
-    @classmethod
-    def from_env(cls) -> "SnowflakeSettings":
-        return cls(
-            account=_require("SNOWFLAKE_ACCOUNT"),
-            user=_require("SNOWFLAKE_USER"),
-            password=_require("SNOWFLAKE_PASSWORD"),
-            role=os.getenv("SNOWFLAKE_ROLE", "REVINTEL_LOADER"),
-            warehouse=os.getenv("SNOWFLAKE_WAREHOUSE", "REVINTEL_WH"),
-            database=os.getenv("SNOWFLAKE_DATABASE", "REVINTEL"),
-        )
+    log_format: Literal["text", "json"] = "text"
+    log_level: str = "INFO"
+    duckdb_path: Path = Field(
+        OUTPUT_DIR / "revintel.duckdb", validation_alias=AliasChoices("REVINTEL_DUCKDB_PATH", "DUCKDB_PATH")
+    )
+
+    # Snowflake: key-pair auth for services (prod), SSO for developers (dev), password as a fallback
+    snowflake_account: str | None = None
+    snowflake_user: str | None = None
+    snowflake_private_key: SecretStr | None = None  # PEM content (from Key Vault)
+    snowflake_private_key_passphrase: SecretStr | None = None
+    snowflake_password: SecretStr | None = None
+    snowflake_authenticator: str = "externalbrowser"
+    snowflake_role: str = "REVINTEL_LOADER"
+    snowflake_warehouse: str = "REVINTEL_WH"
+    snowflake_database: str = "REVINTEL"
+
+    # Azure Data Lake: managed identity via account URL (preferred) or a connection string
+    azure_storage_account_url: str | None = None
+    azure_storage_connection_string: SecretStr | None = None
+    azure_storage_container: str = "revintel"
+
+    # Power BI service principal for dataset refresh
+    powerbi_tenant_id: str | None = None
+    powerbi_client_id: str | None = None
+    powerbi_client_secret: SecretStr | None = None
+    powerbi_workspace_id: str | None = None
+    powerbi_dataset_id: str | None = None
+
+    # Slack / Teams incoming webhook for failure alerts
+    alert_webhook_url: SecretStr | None = None
+
+    def require(self, *names: str) -> None:
+        missing = [n.upper() for n in names if getattr(self, n) in (None, "")]
+        if missing:
+            raise RuntimeError(f"Missing required settings: {', '.join(missing)} (see .env.example)")
 
 
-@dataclass(frozen=True)
-class AzureSettings:
-    connection_string: str
-    container: str
-
-    @classmethod
-    def from_env(cls) -> "AzureSettings":
-        return cls(
-            connection_string=_require("AZURE_STORAGE_CONNECTION_STRING"),
-            container=os.getenv("AZURE_STORAGE_CONTAINER", "revintel"),
-        )
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

@@ -1,0 +1,88 @@
+version: 2
+
+models:
+  - name: fct_orders
+    description: "Order-level fact. Grain: one row per order. Incremental on the CDC `ingested_at` timestamp."
+    columns:
+      - name: order_id
+        description: ERP order number.
+        data_tests: [unique, not_null]
+      - name: customer_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_customer')
+                field: customer_id
+      - name: order_date
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_day
+      - name: status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [completed, refunded, cancelled]
+      - name: gross_amount_usd
+        description: Sum of line amounts in USD before discount.
+      - name: net_revenue_usd
+        description: Recognised revenue in USD (after discount; zero for refunded/cancelled orders).
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "net_revenue_usd <= gross_amount_usd"
+
+  - name: fct_order_items
+    description: "Order-line fact in local currency and USD. Grain: one row per order line."
+    columns:
+      - name: order_item_id
+        data_tests: [unique, not_null]
+      - name: product_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_product')
+                field: product_id
+
+  - name: dim_customer
+    description: Current customer attributes plus purchase summary. Email is masked in Snowflake for reporting roles.
+    columns:
+      - name: customer_id
+        data_tests: [unique, not_null]
+      - name: email
+        description: PII (dynamic masking policy `ops.pii_email_mask`).
+      - name: segment
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [Consumer, SMB, Enterprise]
+      - name: first_order_month
+        description: Cohort month - month of first completed purchase.
+
+  - name: dim_customer_history
+    description: SCD Type 2 customer history built from the `snap_customers` snapshot.
+    columns:
+      - name: customer_version_key
+        data_tests: [unique, not_null]
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "valid_from < valid_to"
+
+  - name: dim_product
+    columns:
+      - name: product_id
+        data_tests: [unique, not_null]
+
+  - name: dim_date
+    description: Calendar dimension for time intelligence (mark as date table in Power BI).
+    columns:
+      - name: date_day
+        data_tests: [unique, not_null]

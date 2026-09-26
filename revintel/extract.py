@@ -1,4 +1,5 @@
 """Extract raw source-system files into DataFrames (all as strings; typing happens in transform)."""
+
 from __future__ import annotations
 
 from pathlib import Path

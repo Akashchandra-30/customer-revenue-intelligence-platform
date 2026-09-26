@@ -1,0 +1,26 @@
+version: 2
+
+exposures:
+  - name: revenue_intelligence_dashboard
+    label: Customer & Revenue Intelligence (Power BI)
+    type: dashboard
+    maturity: high
+    url: https://app.powerbi.com/groups/<workspace-id>/reports/<report-id>
+    description: >
+      Executive, revenue, customer-segment and retention pages used by Finance,
+      Sales and Customer Success. Refreshed daily after `dbt build` succeeds.
+    depends_on:
+      - ref('fct_orders')
+      - ref('fct_order_items')
+      - ref('dim_customer')
+      - ref('dim_product')
+      - ref('dim_date')
+      - ref('customer_ltv')
+      - ref('rfm_segments')
+      - ref('cohort_retention')
+      - ref('retention_90d')
+      - ref('monthly_revenue')
+      - ref('kpi_summary')
+    owner:
+      name: Analytics Engineering
+      email: analytics@example.com

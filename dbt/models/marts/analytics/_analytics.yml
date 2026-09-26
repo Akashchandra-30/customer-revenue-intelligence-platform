@@ -1,0 +1,103 @@
+version: 2
+
+models:
+  - name: monthly_revenue
+    description: Monthly revenue trend with MoM/YoY growth, rolling 3-month, YTD and cumulative revenue.
+    columns:
+      - name: order_month
+        data_tests: [unique, not_null]
+      - name: mom_growth_pct
+        description: Month-over-month revenue growth in percent.
+      - name: yoy_growth_pct
+        description: Growth versus the same month last year in percent.
+
+  - name: customer_ltv
+    description: One row per paying customer with historical and predicted lifetime value.
+    columns:
+      - name: customer_id
+        data_tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_customer')
+                field: customer_id
+      - name: lifecycle_status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [Active, Lapsing, Churned]
+      - name: predicted_clv_usd
+        description: "AOV x monthly purchase frequency x gross margin x horizon (vars: gross_margin, clv_horizon_months)."
+      - name: cumulative_revenue_share
+        description: Running share of total revenue when customers are ranked by value (Pareto curve).
+
+  - name: cohort_retention
+    description: Retention and cumulative revenue per customer by first-purchase cohort and months since first order.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [cohort_month, months_since_first]
+    columns:
+      - name: retention_rate
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+
+  - name: retention_90d
+    description: Rolling 90-day retention and churn rate by month.
+    columns:
+      - name: month_start
+        data_tests: [unique]
+
+  - name: rfm_segments
+    description: RFM quintile scores and segment labels for each paying customer.
+    columns:
+      - name: customer_id
+        data_tests: [unique]
+      - name: rfm_segment
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [Champions, Loyal, New / Promising, At Risk, Cannot Lose, Hibernating, Needs Attention]
+
+  - name: revenue_by_segment
+    description: Monthly revenue by segment, country, acquisition channel and sales channel.
+
+  - name: revenue_by_category
+    description: Monthly product-category revenue with rank, share and MoM growth.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [order_month, category]
+
+  - name: kpi_summary
+    description: Single-row headline KPIs for dashboard cards.
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "repeat_purchase_rate between 0 and 1"
+
+unit_tests:
+  - name: test_customer_ltv_lifecycle_buckets
+    description: Lifecycle status is driven by days since last order against the as-of date.
+    model: customer_ltv
+    overrides:
+      vars: {active_days: 90, lapsing_days: 180}
+    given:
+      - input: ref('fct_orders')
+        rows:
+          - {order_date: "2025-06-30"}
+      - input: ref('dim_customer')
+        rows:
+          - {customer_id: A, segment: SMB, is_paying_customer: true, completed_orders: 2, lifetime_revenue_usd: 200, first_order_date: "2025-01-01", last_order_date: "2025-06-01"}
+          - {customer_id: L, segment: SMB, is_paying_customer: true, completed_orders: 1, lifetime_revenue_usd: 100, first_order_date: "2025-01-15", last_order_date: "2025-02-15"}
+          - {customer_id: C, segment: SMB, is_paying_customer: true, completed_orders: 1, lifetime_revenue_usd: 50,  first_order_date: "2024-06-01", last_order_date: "2024-06-01"}
+          - {customer_id: N, segment: SMB, is_paying_customer: false, completed_orders: 0, lifetime_revenue_usd: 0}
+    expect:
+      rows:
+        - {customer_id: A, lifecycle_status: Active,  days_since_last_order: 29,  avg_order_value_usd: 100}
+        - {customer_id: L, lifecycle_status: Lapsing, days_since_last_order: 135, avg_order_value_usd: 100}
+        - {customer_id: C, lifecycle_status: Churned, days_since_last_order: 394, avg_order_value_usd: 50}

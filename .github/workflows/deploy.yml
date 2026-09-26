@@ -1,0 +1,56 @@
+name: Deploy
+
+# Builds and pushes the pipeline image to Azure Container Registry, then deploys
+# dbt models to Snowflake prod. Enabled by setting the repository variable
+# DEPLOY_ENABLED=true and the secrets listed below (OIDC federated credential for Azure).
+
+on:
+  push:
+    branches: [main]
+    paths: ["revintel/**", "dbt/**", "sql/**", "Dockerfile", "pyproject.toml"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  image:
+    if: vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - run: az acr login --name ${{ vars.ACR_NAME }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ vars.ACR_NAME }}.azurecr.io/revintel:${{ github.sha }}
+            ${{ vars.ACR_NAME }}.azurecr.io/revintel:latest
+
+  dbt-prod:
+    if: vars.DEPLOY_ENABLED == 'true'
+    needs: image
+    runs-on: ubuntu-latest
+    environment: prod  # requires reviewer approval in GitHub environment settings
+    env:
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+      SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[snowflake]"
+      - run: dbt deps --project-dir dbt --profiles-dir dbt
+      - name: Build and test models in prod
+        run: dbt build --project-dir dbt --profiles-dir dbt --target prod

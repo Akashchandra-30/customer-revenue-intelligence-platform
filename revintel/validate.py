@@ -1,4 +1,5 @@
 """Data-quality gate run on the cleaned tables before anything is loaded to Snowflake."""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
@@ -58,11 +59,15 @@ def reconciliation(raw: dict[str, pd.DataFrame], results: dict[str, CleanResult]
     checks = []
     for name, res in results.items():
         accounted = len(res.data) + len(res.rejects) + res.duplicates_removed
-        checks.append(Check(
-            "row_reconciliation", name, accounted == len(raw[name]),
-            f"raw={len(raw[name])} clean={len(res.data)} rejected={len(res.rejects)} "
-            f"deduped={res.duplicates_removed}",
-        ))
+        checks.append(
+            Check(
+                "row_reconciliation",
+                name,
+                accounted == len(raw[name]),
+                f"raw={len(raw[name])} clean={len(res.data)} rejected={len(res.rejects)} "
+                f"deduped={res.duplicates_removed}",
+            )
+        )
         reject_rate = len(res.rejects) / max(len(raw[name]), 1)
         checks.append(Check("reject_rate<5%", name, reject_rate < 0.05, f"{reject_rate:.2%} rejected", "warning"))
     return checks

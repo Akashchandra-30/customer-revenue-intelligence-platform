@@ -1,0 +1,25 @@
+// =============================================================================
+// Row-level security (Modeling > Manage roles)
+//
+// Dynamic RLS: users only see customers in countries granted to them in
+// core.security_country_access (a version-controlled dbt seed). One role covers
+// every regional manager; access changes are a reviewed pull request, not a
+// Power BI republish.
+//
+// Setup:
+//   1. Import core.security_country_access (no relationships needed).
+//   2. Create role "Regional Manager" with this filter on dim_customer.
+//   3. In the Power BI Service, add the regional managers' AAD group to the role.
+//   4. Executives/Finance are not added to any role, so they see everything.
+// =============================================================================
+
+// Table: dim_customer
+[country]
+    IN CALCULATETABLE (
+        VALUES ( security_country_access[country] ),
+        security_country_access[user_email] = USERPRINCIPALNAME ()
+    )
+
+// Filters flow dim_customer -> fct_orders -> fct_order_items, and to customer_ltv /
+// rfm_segments through their 1:1 relationships (set "Apply security filter in both directions").
+// Test with Modeling > View as > Other user: emea.manager@example.com

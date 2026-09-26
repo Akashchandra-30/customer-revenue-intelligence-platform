@@ -1,14 +1,27 @@
 # Secrets
 .env
+*.p8
+*.pem
 
-# Generated data & outputs (reproducible via `python -m revintel.pipeline --generate`)
+# Generated data & outputs (reproducible via `revintel run --generate`)
 data/
 output/
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/.user.yml
+logs/
 
 # Python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
 .venv/
 venv/
 

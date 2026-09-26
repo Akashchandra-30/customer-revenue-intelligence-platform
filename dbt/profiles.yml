@@ -1,0 +1,37 @@
+# Credentials come from environment variables only (Key Vault in Azure, .env locally).
+revintel:
+  target: local
+  outputs:
+    # Local development and CI: DuckDB file written by `revintel ingest --target local`
+    local:
+      type: duckdb
+      path: "{{ env_var('REVINTEL_DUCKDB_PATH', '../output/revintel.duckdb') }}"
+      schema: main
+      threads: 4
+
+    # Developer sandbox in Snowflake: SSO login, models built into DEV_<USER>_* schemas
+    dev:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      authenticator: externalbrowser
+      role: REVINTEL_TRANSFORMER
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'REVINTEL_WH') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', 'REVINTEL') }}"
+      schema: "dev_{{ env_var('USER', env_var('USERNAME', 'analyst')) | lower }}"
+      threads: 8
+      query_tag: revintel-dbt-dev
+
+    # Production: service user with RSA key-pair auth (key stored in Azure Key Vault)
+    prod:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      private_key: "{{ env_var('SNOWFLAKE_PRIVATE_KEY') }}"
+      private_key_passphrase: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PASSPHRASE', '') }}"
+      role: REVINTEL_TRANSFORMER
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'REVINTEL_WH') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', 'REVINTEL') }}"
+      schema: public
+      threads: 8
+      query_tag: revintel-dbt-prod

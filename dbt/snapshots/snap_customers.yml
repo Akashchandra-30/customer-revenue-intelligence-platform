@@ -1,0 +1,9 @@
+snapshots:
+  - name: snap_customers
+    description: SCD Type 2 history of customer attributes, driven by the CRM updated_at timestamp.
+    relation: ref('stg_crm__customers')
+    config:
+      unique_key: customer_id
+      strategy: timestamp
+      updated_at: updated_at
+      hard_deletes: invalidate

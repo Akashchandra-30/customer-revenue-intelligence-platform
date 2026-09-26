@@ -1,34 +1,27 @@
-// Power Query (M) - connect Power BI to the Snowflake CORE/ANALYTICS layers.
-// 1. Home > Manage Parameters: create text parameters SnowflakeServer
-//    (e.g. "xy12345.west-europe.azure.snowflakecomputing.com") and SnowflakeWarehouse ("REVINTEL_WH").
-// 2. Home > Get Data > Blank Query > Advanced Editor, paste one query per table,
-//    changing the Schema/Object names. Use Import mode with scheduled refresh,
-//    or DirectQuery for the large fact tables.
+// Power Query (M) - connect Power BI to Snowflake CORE / ANALYTICS.
+//
+// 1. Home > Manage Parameters: create text parameters
+//      SnowflakeServer     e.g. "xy12345.west-europe.azure.snowflakecomputing.com"
+//      SnowflakeWarehouse  "REVINTEL_WH"
+// 2. Create the function below as a blank query named fnSnowflakeTable.
+// 3. Create one query per table: = fnSnowflakeTable("CORE", "FCT_ORDERS")
+// Import mode + scheduled refresh (triggered by the pipeline's publish stage).
+// For very large facts use DirectQuery or incremental refresh on ORDER_DATE.
 
+(schema as text, objectName as text) as table =>
 let
-    Source    = Snowflake.Databases(SnowflakeServer, SnowflakeWarehouse, [Role = "REVINTEL_REPORTER"]),
-    Database  = Source{[Name = "REVINTEL", Kind = "Database"]}[Data],
-    Schema    = Database{[Name = "CORE", Kind = "Schema"]}[Data],
-    fct_orders = Schema{[Name = "FCT_ORDERS", Kind = "Table"]}[Data],
-    Typed = Table.TransformColumnTypes(
-        fct_orders,
-        {
-            {"ORDER_DATE", type date},
-            {"ORDER_MONTH", type date},
-            {"NET_REVENUE_USD", Currency.Type},
-            {"GROSS_AMOUNT_USD", Currency.Type},
-            {"DISCOUNT_AMOUNT_USD", Currency.Type}
-        }
-    ),
+    Source   = Snowflake.Databases(SnowflakeServer, SnowflakeWarehouse, [Role = "REVINTEL_REPORTER"]),
+    Database = Source{[Name = "REVINTEL", Kind = "Database"]}[Data],
+    Schema   = Database{[Name = schema, Kind = "Schema"]}[Data],
+    Data     = Schema{[Name = objectName]}[Data],
     // Snowflake returns upper-case identifiers; lower-case them to match measures.dax
-    Renamed = Table.TransformColumnNames(Typed, Text.Lower)
+    Renamed  = Table.TransformColumnNames(Data, Text.Lower)
 in
     Renamed
 
 // Objects to import:
-//   CORE.FCT_ORDERS, CORE.FCT_ORDER_ITEMS, CORE.DIM_CUSTOMER, CORE.DIM_PRODUCT
-//   ANALYTICS.CUSTOMER_LTV, ANALYTICS.RFM_SEGMENTS, ANALYTICS.COHORT_RETENTION,
-//   ANALYTICS.MONTHLY_REVENUE, ANALYTICS.RETENTION_90D, ANALYTICS.KPI_SUMMARY
+//   CORE:      FCT_ORDERS, FCT_ORDER_ITEMS, DIM_CUSTOMER, DIM_PRODUCT, DIM_DATE, SECURITY_COUNTRY_ACCESS
+//   ANALYTICS: CUSTOMER_LTV, RFM_SEGMENTS, COHORT_RETENTION, MONTHLY_REVENUE, RETENTION_90D, KPI_SUMMARY
 //
-// Offline alternative: `python -m revintel.pipeline --target local` writes the same
-// tables as CSV to output/powerbi/ - use Get Data > Folder on that directory.
+// Offline alternative: `revintel run --target local --generate` writes the same tables
+// as CSV to output/powerbi/ - use Get Data > Folder on that directory.

@@ -11,6 +11,7 @@ Real extracts are never clean, so this injects the usual problems: duplicate
 records, inconsistent casing/whitespace, mixed date formats, orphan keys,
 missing values and invalid quantities. The ETL layer has to handle all of it.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -20,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from revintel.config import RAW_DIR
+from revintel.config import LANDING_DIR
 
 log = logging.getLogger(__name__)
 
@@ -29,8 +30,13 @@ END = pd.Timestamp("2026-08-31")
 
 FX_RATE_TO_USD = {"USD": 1.0, "EUR": 1.09, "GBP": 1.27, "INR": 0.012, "CAD": 0.74, "AUD": 0.66}
 COUNTRIES = {  # country -> (currency, weight)
-    "US": ("USD", 0.38), "GB": ("GBP", 0.14), "DE": ("EUR", 0.12), "FR": ("EUR", 0.08),
-    "IN": ("INR", 0.14), "CA": ("CAD", 0.08), "AU": ("AUD", 0.06),
+    "US": ("USD", 0.38),
+    "GB": ("GBP", 0.14),
+    "DE": ("EUR", 0.12),
+    "FR": ("EUR", 0.08),
+    "IN": ("INR", 0.14),
+    "CA": ("CAD", 0.08),
+    "AU": ("AUD", 0.06),
 }
 SEGMENTS = {  # segment -> (share, monthly order rate, mean lifetime months, max qty)
     "Consumer": (0.70, 0.30, 12, 3),
@@ -39,18 +45,118 @@ SEGMENTS = {  # segment -> (share, monthly order rate, mean lifetime months, max
 }
 CHANNELS = {"Organic": 0.30, "Paid Search": 0.25, "Social": 0.15, "Referral": 0.18, "Partner": 0.12}
 CATALOG = {  # category -> (price range USD, product nouns)
-    "Software": ((49, 499), ["Analytics Suite", "Security Pack", "Design Studio", "Dev Toolkit", "Backup Pro", "CRM Lite", "Invoice Manager", "Data Connector"]),
-    "Hardware": ((99, 1499), ["Laptop Dock", "4K Monitor", "Mesh Router", "NAS Drive", "Webcam HD", "Mech Keyboard", "Thin Client", "POS Terminal"]),
-    "Services": ((199, 2999), ["Onboarding", "Migration", "Premium Support", "Training Day", "Health Check", "Custom Integration", "Audit", "Advisory"]),
-    "Subscriptions": ((9, 99), ["Cloud Storage", "Email Plus", "VPN", "Monitoring", "Password Vault", "E-Sign", "Chat Seats", "API Credits"]),
-    "Accessories": ((5, 79), ["USB-C Cable", "Mouse", "Headset", "Laptop Sleeve", "Stand", "Adapter", "Surge Protector", "Mouse Pad"]),
+    "Software": (
+        (49, 499),
+        [
+            "Analytics Suite",
+            "Security Pack",
+            "Design Studio",
+            "Dev Toolkit",
+            "Backup Pro",
+            "CRM Lite",
+            "Invoice Manager",
+            "Data Connector",
+        ],
+    ),
+    "Hardware": (
+        (99, 1499),
+        [
+            "Laptop Dock",
+            "4K Monitor",
+            "Mesh Router",
+            "NAS Drive",
+            "Webcam HD",
+            "Mech Keyboard",
+            "Thin Client",
+            "POS Terminal",
+        ],
+    ),
+    "Services": (
+        (199, 2999),
+        [
+            "Onboarding",
+            "Migration",
+            "Premium Support",
+            "Training Day",
+            "Health Check",
+            "Custom Integration",
+            "Audit",
+            "Advisory",
+        ],
+    ),
+    "Subscriptions": (
+        (9, 99),
+        ["Cloud Storage", "Email Plus", "VPN", "Monitoring", "Password Vault", "E-Sign", "Chat Seats", "API Credits"],
+    ),
+    "Accessories": (
+        (5, 79),
+        ["USB-C Cable", "Mouse", "Headset", "Laptop Sleeve", "Stand", "Adapter", "Surge Protector", "Mouse Pad"],
+    ),
 }
-FIRST_NAMES = ["James", "Olivia", "Liam", "Emma", "Noah", "Ava", "Arjun", "Priya", "Lukas", "Sofia", "Chloe",
-               "Ethan", "Mia", "Rahul", "Ananya", "Jack", "Isla", "Leon", "Hannah", "Lucas", "Zoe", "Aditya",
-               "Grace", "Oscar", "Amelia", "Mateo", "Ella", "Hugo", "Lea", "William"]
-LAST_NAMES = ["Smith", "Johnson", "Brown", "Patel", "Sharma", "Müller", "Schmidt", "Martin", "Bernard", "Wilson",
-              "Taylor", "Singh", "Kumar", "Walker", "Clarke", "Dubois", "Fischer", "Nguyen", "Thompson", "Reddy",
-              "Evans", "Wright", "Moreau", "Wagner", "Roberts", "Iyer", "Campbell", "Lee", "King", "Green"]
+FIRST_NAMES = [
+    "James",
+    "Olivia",
+    "Liam",
+    "Emma",
+    "Noah",
+    "Ava",
+    "Arjun",
+    "Priya",
+    "Lukas",
+    "Sofia",
+    "Chloe",
+    "Ethan",
+    "Mia",
+    "Rahul",
+    "Ananya",
+    "Jack",
+    "Isla",
+    "Leon",
+    "Hannah",
+    "Lucas",
+    "Zoe",
+    "Aditya",
+    "Grace",
+    "Oscar",
+    "Amelia",
+    "Mateo",
+    "Ella",
+    "Hugo",
+    "Lea",
+    "William",
+]
+LAST_NAMES = [
+    "Smith",
+    "Johnson",
+    "Brown",
+    "Patel",
+    "Sharma",
+    "Müller",
+    "Schmidt",
+    "Martin",
+    "Bernard",
+    "Wilson",
+    "Taylor",
+    "Singh",
+    "Kumar",
+    "Walker",
+    "Clarke",
+    "Dubois",
+    "Fischer",
+    "Nguyen",
+    "Thompson",
+    "Reddy",
+    "Evans",
+    "Wright",
+    "Moreau",
+    "Wagner",
+    "Roberts",
+    "Iyer",
+    "Campbell",
+    "Lee",
+    "King",
+    "Green",
+]
 DOMAINS = ["gmail.com", "outlook.com", "yahoo.com", "proton.me", "company.io", "corp.net"]
 
 
@@ -65,12 +171,14 @@ def make_products(rng: np.random.Generator) -> pd.DataFrame:
     pid = 1
     for category, ((lo, hi), nouns) in CATALOG.items():
         for noun in nouns:
-            rows.append({
-                "product_id": f"P{pid:04d}",
-                "product_name": noun,
-                "category": category,
-                "list_price_usd": round(float(rng.uniform(lo, hi)), 2),
-            })
+            rows.append(
+                {
+                    "product_id": f"P{pid:04d}",
+                    "product_name": noun,
+                    "category": category,
+                    "list_price_usd": round(float(rng.uniform(lo, hi)), 2),
+                }
+            )
             pid += 1
     return pd.DataFrame(rows)
 
@@ -82,19 +190,23 @@ def make_customers(rng: np.random.Generator, n: int) -> pd.DataFrame:
     first = rng.choice(FIRST_NAMES, n)
     last = rng.choice(LAST_NAMES, n)
     ids = np.arange(100001, 100001 + n)
-    emails = [f"{f}.{l}{i % 1000}@{d}".lower().replace("ü", "u")
-              for f, l, i, d in zip(first, last, ids, rng.choice(DOMAINS, n))]
-    df = pd.DataFrame({
-        "customer_id": [f"C{i}" for i in ids],
-        "first_name": first,
-        "last_name": last,
-        "email": emails,
-        "country": _choice(rng, {k: v[1] for k, v in COUNTRIES.items()}, n),
-        "segment": _choice(rng, {k: v[0] for k, v in SEGMENTS.items()}, n),
-        "acquisition_channel": _choice(rng, CHANNELS, n),
-        "signup_date": signup,
-    })
-    df["updated_at"] = df["signup_date"] + pd.to_timedelta(rng.integers(0, 400, n), unit="D")
+    emails = [
+        f"{fn}.{ln}{i % 1000}@{d}".lower().replace("ü", "u")
+        for fn, ln, i, d in zip(first, last, ids, rng.choice(DOMAINS, n), strict=True)
+    ]
+    df = pd.DataFrame(
+        {
+            "customer_id": [f"C{i}" for i in ids],
+            "first_name": first,
+            "last_name": last,
+            "email": emails,
+            "country": _choice(rng, {k: v[1] for k, v in COUNTRIES.items()}, n),
+            "segment": _choice(rng, {k: v[0] for k, v in SEGMENTS.items()}, n),
+            "acquisition_channel": _choice(rng, CHANNELS, n),
+            "signup_date": signup,
+        }
+    )
+    df["updated_at"] = (df["signup_date"] + pd.to_timedelta(rng.integers(0, 400, n), unit="D")).clip(upper=END)
     return df
 
 
@@ -112,14 +224,18 @@ def make_orders(rng: np.random.Generator, customers: pd.DataFrame) -> pd.DataFra
             dates = [first_order] + [row.signup_date + pd.Timedelta(days=int(o)) for o in offsets]
             # Q4 seasonality: drop some non-Q4 orders
             keep = [d == first_order or d.month >= 11 or rng.random() < 0.8 for d in dates]
-            dates = [d for d, k in zip(dates, keep) if k and d <= END]
+            dates = [d for d, k in zip(dates, keep, strict=True) if k and d <= END]
             seconds = rng.integers(8 * 3600, 23 * 3600, len(dates))
-            frames.append(pd.DataFrame({
-                "customer_id": row.customer_id,
-                "order_ts": [d + pd.Timedelta(seconds=int(s)) for d, s in zip(dates, seconds)],
-                "currency": COUNTRIES[row.country][0],
-                "segment": seg,
-            }))
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "customer_id": row.customer_id,
+                        "order_ts": [d + pd.Timedelta(seconds=int(s)) for d, s in zip(dates, seconds, strict=True)],
+                        "currency": COUNTRIES[row.country][0],
+                        "segment": seg,
+                    }
+                )
+            )
     orders = pd.concat(frames, ignore_index=True).sort_values("order_ts", ignore_index=True)
     n = len(orders)
     orders.insert(0, "order_id", [f"SO{1_000_000 + i}" for i in range(n)])
@@ -137,11 +253,13 @@ def make_orders(rng: np.random.Generator, customers: pd.DataFrame) -> pd.DataFra
 def make_order_items(rng: np.random.Generator, orders: pd.DataFrame, products: pd.DataFrame) -> pd.DataFrame:
     n_lines = rng.choice([1, 2, 3, 4], len(orders), p=[0.45, 0.30, 0.17, 0.08])
     idx = np.repeat(np.arange(len(orders)), n_lines)
-    items = pd.DataFrame({
-        "order_id": orders["order_id"].to_numpy()[idx],
-        "segment": orders["segment"].to_numpy()[idx],
-        "currency": orders["currency"].to_numpy()[idx],
-    })
+    items = pd.DataFrame(
+        {
+            "order_id": orders["order_id"].to_numpy()[idx],
+            "segment": orders["segment"].to_numpy()[idx],
+            "currency": orders["currency"].to_numpy()[idx],
+        }
+    )
     items["line_number"] = items.groupby("order_id").cumcount() + 1
     prod_idx = rng.integers(0, len(products), len(items))
     items["product_id"] = products["product_id"].to_numpy()[prod_idx]
@@ -152,14 +270,16 @@ def make_order_items(rng: np.random.Generator, orders: pd.DataFrame, products: p
     return items[["order_id", "line_number", "product_id", "quantity", "unit_price"]]
 
 
-def inject_quality_issues(rng: np.random.Generator, customers: pd.DataFrame, orders: pd.DataFrame,
-                          items: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def inject_quality_issues(
+    rng: np.random.Generator, customers: pd.DataFrame, orders: pd.DataFrame, items: pd.DataFrame
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     customers = customers.copy()
     n = len(customers)
     # Mixed date formats from a CRM migration
     alt = rng.random(n) < 0.25
     customers["signup_date"] = np.where(
-        alt, customers["signup_date"].dt.strftime("%d %b %Y"), customers["signup_date"].dt.strftime("%Y-%m-%d"))
+        alt, customers["signup_date"].dt.strftime("%d %b %Y"), customers["signup_date"].dt.strftime("%Y-%m-%d")
+    )
     customers["updated_at"] = customers["updated_at"].dt.strftime("%Y-%m-%d %H:%M:%S")
     # Casing / whitespace noise
     m = rng.random(n) < 0.08
@@ -178,16 +298,16 @@ def inject_quality_issues(rng: np.random.Generator, customers: pd.DataFrame, ord
     customers = pd.concat([customers, dupes], ignore_index=True).sample(frac=1, random_state=2)
 
     orders = orders.drop(columns="segment").copy()
-    m = len(orders)
+    n_orders = len(orders)
     iso = orders["order_ts"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-    orders["order_ts"] = np.where(rng.random(m) < 0.2, orders["order_ts"].dt.strftime("%Y-%m-%d %H:%M:%S"), iso)
+    orders["order_ts"] = np.where(rng.random(n_orders) < 0.2, orders["order_ts"].dt.strftime("%Y-%m-%d %H:%M:%S"), iso)
     orders["ingested_at"] = orders["ingested_at"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-    mask = rng.random(m) < 0.05
+    mask = rng.random(n_orders) < 0.05
     orders.loc[mask, "currency"] = orders.loc[mask, "currency"].str.lower()
-    mask = rng.random(m) < 0.03
+    mask = rng.random(n_orders) < 0.03
     orders.loc[mask, "status"] = orders.loc[mask, "status"].str.upper()
-    orders.loc[rng.random(m) < 0.003, "order_ts"] = None
-    orphan = rng.random(m) < 0.004
+    orders.loc[rng.random(n_orders) < 0.003, "order_ts"] = None
+    orphan = rng.random(n_orders) < 0.004
     orders.loc[orphan, "customer_id"] = [f"C9{i:05d}" for i in range(int(orphan.sum()))]
     # Re-delivered records from the ERP change-data-capture feed
     redelivered = orders.sample(frac=0.01, random_state=3).copy()
@@ -204,7 +324,7 @@ def inject_quality_issues(rng: np.random.Generator, customers: pd.DataFrame, ord
     return customers, orders, items
 
 
-def generate(out_dir: Path = RAW_DIR, n_customers: int = 5000, seed: int = 42) -> dict[str, int]:
+def generate(out_dir: Path = LANDING_DIR, n_customers: int = 5000, seed: int = 42) -> dict[str, int]:
     rng = np.random.default_rng(seed)
     products = make_products(rng)
     customers = make_customers(rng, n_customers)
@@ -221,8 +341,13 @@ def generate(out_dir: Path = RAW_DIR, n_customers: int = 5000, seed: int = 42) -
     products.to_csv(out_dir / "catalog" / "products.csv", index=False)
     fx.to_csv(out_dir / "finance" / "fx_rates.csv", index=False)
 
-    counts = {"customers": len(customers), "orders": len(orders), "order_items": len(items),
-              "products": len(products), "fx_rates": len(fx)}
+    counts = {
+        "customers": len(customers),
+        "orders": len(orders),
+        "order_items": len(items),
+        "products": len(products),
+        "fx_rates": len(fx),
+    }
     log.info("Generated raw extracts in %s: %s", out_dir, counts)
     return counts
 
@@ -232,6 +357,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--customers", type=int, default=5000)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--out", type=Path, default=RAW_DIR)
+    parser.add_argument("--out", type=Path, default=LANDING_DIR)
     args = parser.parse_args()
     generate(args.out, args.customers, args.seed)

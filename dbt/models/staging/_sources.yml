@@ -1,0 +1,30 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Append-only landing tables loaded by the Python ingest stage. Every row carries
+      `_batch_id` and `_loaded_at`; the same business key can appear in many batches.
+    schema: raw
+    config:
+      loaded_at_field: _loaded_at
+      freshness:
+        warn_after: {count: 26, period: hour}
+        error_after: {count: 50, period: hour}
+    tables:
+      - name: customers
+        description: CRM customer master (one row per customer per batch).
+        columns:
+          - name: customer_id
+            data_tests: [not_null]
+      - name: orders
+        description: ERP order headers from the change-data-capture feed.
+        columns:
+          - name: order_id
+            data_tests: [not_null]
+      - name: order_items
+        description: ERP order lines in local currency.
+      - name: products
+        description: Product catalog with USD list prices.
+      - name: fx_rates
+        description: Finance currency conversion rates to USD.

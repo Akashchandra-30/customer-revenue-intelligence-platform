@@ -1,8 +1,14 @@
 # Customer & Revenue Intelligence Platform
 
-An end-to-end customer and revenue analytics platform. It pulls transactional and customer data from several source systems, cleans and validates it with **Python (Pandas/NumPy)**, stages it in **Azure** Data Lake Storage, and models it in **Snowflake**. Advanced **SQL** calculates revenue trends, customer lifetime value, retention and segmentation, and **Power BI** dashboards built with **DAX** present the results to business stakeholders.
+[![CI](https://github.com/Akashchandra-30/customer-revenue-intelligence-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Akashchandra-30/customer-revenue-intelligence-platform/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
+![dbt](https://img.shields.io/badge/dbt-1.10%2B-orange)
+![Snowflake](https://img.shields.io/badge/warehouse-Snowflake-29B5E8)
+![Azure](https://img.shields.io/badge/cloud-Azure-0078D4)
 
-**Stack:** SQL · Python · Azure · Snowflake · Power BI
+A production-style customer and revenue analytics platform. It ingests transactional and customer data from several source systems, and validates and quarantines it with **Python (Pandas/NumPy)**. The data is staged in an **Azure** data lake, loaded into **Snowflake**, and modelled with **dbt** into a tested star schema. Advanced **SQL** calculates revenue trends, customer lifetime value, retention and RFM segmentation, and **Power BI** dashboards with **DAX** measures and row-level security serve the results. The pipeline is orchestrated with **Airflow**, deployed with **Bicep** and **Docker**, and tested in **CI/CD**.
+
+**Stack:** SQL · Python · dbt · Snowflake · Azure (ADLS Gen2, Key Vault, Container Apps) · Airflow · Power BI · Docker · GitHub Actions
 
 ---
 
@@ -10,63 +16,57 @@ An end-to-end customer and revenue analytics platform. It pulls transactional an
 
 ```mermaid
 flowchart LR
-    subgraph Sources
-        CRM[CRM<br/>customers.csv]
-        ERP[ERP<br/>orders.jsonl + order_items.csv]
-        CAT[Catalog<br/>products.csv]
-        FIN[Finance<br/>fx_rates.csv]
+    S[CRM · ERP CDC · Catalog · FX] --> I
+
+    subgraph I["Ingest - Python"]
+        direction TB
+        I1[clean & conform] --> I2{27 DQ checks}
     end
 
-    subgraph Python["Python ETL (Pandas / NumPy)"]
-        EX[extract] --> TR[clean & conform] --> DQ{27 data-quality<br/>checks}
+    I2 -- pass --> L[(Azure ADLS Gen2<br/>clean / rejects / dq<br/>per batch)]
+    L -- COPY INTO --> R
+
+    subgraph SF["Snowflake - modelled with dbt"]
+        direction TB
+        R[(RAW<br/>append-only)] --> ST[(STAGING)] --> C[(CORE<br/>star schema + SCD2)] --> A[(ANALYTICS)]
     end
 
-    subgraph Azure["Azure (ADLS Gen2)"]
-        CL[clean/*.parquet]
-        AR[archive/load_date=…]
-        RJ[rejects/…]
-    end
-
-    subgraph Snowflake
-        RAW[(RAW)] --> CORE[(CORE<br/>star schema)] --> AN[(ANALYTICS<br/>views)]
-    end
-
-    Sources --> EX
-    DQ -- pass --> CL & AR
-    TR -- quarantined rows --> RJ
-    CL -- "COPY INTO via external stage" --> RAW
-    AN --> PBI[Power BI<br/>DAX measures]
+    A --> P[Power BI<br/>DAX · RLS]
+    I2 -. results .-> O[(OPS<br/>audit + DQ)]
+    AF[[Airflow]] -. ingest → freshness → dbt build → refresh .-> I & SF & P
 ```
 
-| Layer | What happens | Where |
+Design decisions are recorded as ADRs in [`docs/architecture.md`](docs/architecture.md). On-call procedures are in [`docs/runbook.md`](docs/runbook.md).
+
+## What makes it production-grade
+
+| Area | Implementation |
+|---|---|
+| **Idempotent, incremental loads** | Append-only RAW with `_batch_id` / `_loaded_at`. A batch is replaced when re-run, so retries are safe. The facts are dbt `incremental` models on the CDC timestamp, with a lookback window for late-arriving refunds. |
+| **History** | SCD Type 2 customer dimension from a dbt snapshot, so segment changes don't rewrite past revenue. The data lake keeps every batch for replay and audit. |
+| **Data quality** | A Python gate blocks bad loads, and quarantined rows are kept with a reason. dbt adds 61 data tests, 2 unit tests, 3 reconciliation tests and source freshness SLAs. Results are persisted to `ops.dq_results`. |
+| **Observability** | `ops.pipeline_runs` audit table, JSON logs with a `run_id` that correlates Airflow, logs, the lake and the warehouse, and Slack/Teams failure alerts. |
+| **Security** | Key Vault plus a managed identity (no storage keys), a Snowflake key-pair service user, least-privilege roles, dynamic email masking and Power BI row-level security. |
+| **Cost control** | Snowflake resource monitor, auto-suspend warehouse, clustering on large facts, and lake lifecycle tiering (cool → archive → 7-year delete). |
+| **Environments** | `local` (DuckDB), `dev` (per-developer Snowflake schemas, SSO) and `prod` (service user). The same dbt models run everywhere through cross-database macros. |
+| **CI/CD** | Lint (ruff), types (mypy), unit and end-to-end tests, `dbt build`, Airflow DAG integrity check, and a Docker build with a smoke test. The deploy workflow pushes the image to ACR and runs `dbt build` in prod behind an approval gate. |
+
+## SQL analytics (dbt + Snowflake)
+
+| Model | Metrics | SQL techniques |
 |---|---|---|
-| **Sources** | 4 systems with realistic problems: duplicates, mixed date formats, casing/whitespace noise, orphan keys, invalid quantities, CDC re-deliveries | [`revintel/generate_data.py`](revintel/generate_data.py) |
-| **Clean & validate** | Standardise, type, deduplicate (latest version wins), quarantine bad rows with a reason, reconcile raw = clean + rejected + deduplicated, block the load if any error-level check fails | [`transform.py`](revintel/transform.py), [`validate.py`](revintel/validate.py) |
-| **Azure** | Parquet snapshots in `clean/`, immutable daily `archive/`, `rejects/` for data stewards; lifecycle tiering; scheduled Container Apps job | [`azure_storage.py`](revintel/azure_storage.py), [`infra/azure/main.bicep`](infra/azure/main.bicep) |
-| **Snowflake** | Warehouse, roles, storage integration, external stage → `RAW` → `CORE` star schema → `ANALYTICS` metric views | [`sql/`](sql) |
-| **Power BI** | Star-schema model, ~30 DAX measures (time intelligence, retention, CLV), 4-page report spec, theme | [`powerbi/`](powerbi) |
-
-## SQL analytics (Snowflake)
-
-All metric logic lives in [`sql/04_analytics_views.sql`](sql/04_analytics_views.sql):
-
-| View | Metrics | Techniques |
-|---|---|---|
-| `monthly_revenue` | Revenue, orders, new vs returning customers, AOV, MoM %, YoY %, rolling 3-month, YTD, cumulative | `LAG`, `LAG(…,12)`, windowed `SUM … ROWS BETWEEN`, `PARTITION BY YEAR()` |
-| `customer_ltv` | Historical LTV, AOV, tenure, purchase frequency, **predicted 24-month CLV**, lifecycle status, rank in segment, percentile, cumulative revenue share (Pareto) | multi-CTE, `DATEDIFF`, `RANK`, `PERCENT_RANK`, running `SUM` / `SUM() OVER ()` |
-| `cohort_retention` | Retention by first-purchase cohort × months since first order, cumulative revenue per customer | cohort CTEs, `COUNT(DISTINCT)`, windowed running totals |
-| `retention_90d` | Rolling 90-day retention and churn rate per month | range self-joins with `DATEADD` |
-| `rfm_segments` | Recency/Frequency/Monetary quintiles → Champions, Loyal, At Risk, Hibernating… | `NTILE(5)` |
-| `revenue_by_segment` / `revenue_by_category` | Revenue by segment, country, channel, category; share of month; category rank and growth | `SUM(SUM(x)) OVER (PARTITION BY …)`, `DENSE_RANK` |
-| `kpi_summary` | Headline KPI row for dashboard cards | aggregate over views |
-
-The `CORE` layer ([`03_core_models.sql`](sql/03_core_models.sql)) converts local currencies to USD, applies discounts, separates gross vs net revenue and adds each customer's order sequence with `ROW_NUMBER()`.
-
-**The SQL is tested without a Snowflake account.** The local runner transpiles the Snowflake SQL to DuckDB with [sqlglot](https://github.com/tobymao/sqlglot) and runs it as-is. The end-to-end tests check that SQL revenue reconciles with an independent Pandas calculation.
+| [`monthly_revenue`](dbt/models/marts/analytics/monthly_revenue.sql) | Revenue, orders, new vs returning customers, AOV, MoM %, YoY %, rolling 3-month, YTD, cumulative | dense month spine, `LAG`, `LAG(…,12)`, windowed `SUM … ROWS BETWEEN` |
+| [`customer_ltv`](dbt/models/marts/analytics/customer_ltv.sql) | Historical LTV, AOV, tenure, frequency, **predicted margin CLV**, lifecycle status, rank in segment, Pareto share | `DATEDIFF`, `RANK`, `PERCENT_RANK`, running totals, `SUM() OVER ()` |
+| [`cohort_retention`](dbt/models/marts/analytics/cohort_retention.sql) | Retention by first-purchase cohort × months since first order, cumulative revenue per customer | cohort CTEs, `COUNT(DISTINCT)`, windowed running totals |
+| [`retention_90d`](dbt/models/marts/analytics/retention_90d.sql) | Rolling 90-day retention and churn | range joins with `DATEADD` |
+| [`rfm_segments`](dbt/models/marts/analytics/rfm_segments.sql) | Recency/Frequency/Monetary scores → Champions, Loyal, At Risk… | `NTILE(5)` |
+| [`revenue_by_segment`](dbt/models/marts/analytics/revenue_by_segment.sql) / [`revenue_by_category`](dbt/models/marts/analytics/revenue_by_category.sql) | Share of month, category rank and growth | `SUM(SUM(x)) OVER (PARTITION BY …)`, `DENSE_RANK` |
+| [`fct_orders`](dbt/models/marts/core/fct_orders.sql) | USD conversion, gross vs net revenue, discounts | incremental `delete+insert`, CDC lookback |
+| [`stg_erp__orders`](dbt/models/staging/stg_erp__orders.sql) | Latest CDC version of each order | `QUALIFY ROW_NUMBER()` |
 
 ## Results on the sample dataset
 
-The default run uses 5,000 customers, ~26k orders and ~48k order lines from Jan 2023 to Aug 2026:
+The default run uses 5,000 customers, ~26k orders and ~48k order lines from Jan 2023 to Aug 2026, generated with realistic defects: duplicates, mixed date formats, orphan keys, CDC re-deliveries and invalid quantities.
 
 | KPI | Value |
 |---|---|
@@ -77,66 +77,67 @@ The default run uses 5,000 customers, ~26k orders and ~48k order lines from Jan 
 | Repeat purchase rate | 73.6% |
 | Revenue from top 10% of customers | 67.0% |
 | Cohort retention, month 1 / 3 / 6 / 12 | 29.1% / 22.5% / 19.1% / 13.2% |
+| Avg rolling 90-day retention | 53.5% |
 | RFM "Champions" | 822 customers = $86.2M (60% of revenue) |
 
-**Data quality:** 27/27 checks pass. 21 customers were quarantined (invalid emails). 325 orders were quarantined: 175 orphan customers, 90 missing timestamps and 60 orders with no valid lines. 738 order lines were quarantined, and 582 duplicate records were collapsed. The full report is at `output/data_quality_report.json`.
+**Data quality per batch:** 27/27 gate checks and 85/85 dbt nodes pass. 21 customers, 325 orders and 738 order lines are quarantined with reasons, and 582 duplicate records are collapsed.
 
 ## Quick start (local, no cloud accounts needed)
 
 ```bash
-pip install -r requirements.txt
-python -m revintel.pipeline --target local --generate
-pytest
+pip install -e ".[dev]"
+revintel run --target local --generate      # ingest → dbt build → export for Power BI
+pytest                                      # unit + end-to-end (runs dbt twice, checks SCD2 and idempotency)
+make dbt-docs                               # lineage graph and model docs at localhost:8080
 ```
 
-This generates the source extracts, cleans and validates them, and builds a DuckDB warehouse at `output/revintel.duckdb` from the Snowflake SQL. It also exports every core table and analytics view to `output/powerbi/*.csv`, so you can build the Power BI report offline.
+Outputs: a DuckDB warehouse at `output/revintel.duckdb`, the data lake in `data/lake/`, and Power BI-ready CSVs in `output/powerbi/`.
 
-## Running on Azure + Snowflake
+**CLI**
 
-1. **Azure:** deploy storage (and optionally the scheduled job):
-   ```bash
-   az group create -n rg-revintel -l westeurope
-   az deployment group create -g rg-revintel -f infra/azure/main.bicep
-   ```
-2. **Snowflake:** fill in `<tenant-id>` / `<storage-account>` in [`sql/00_setup.sql`](sql/00_setup.sql), run it as an admin, then complete the Azure consent step described in the file.
-3. **Configure:** `cp .env.example .env` and fill in the credentials.
-4. **Run:**
-   ```bash
-   # Upload to ADLS, then COPY INTO Snowflake from the external stage
-   python -m revintel.pipeline --target snowflake --upload-azure --via-azure-stage
+```bash
+revintel ingest    --target prod --upload-azure --load-mode stage   # Python → ADLS → COPY INTO RAW
+revintel transform --target prod [--full-refresh] [--select +customer_ltv]
+revintel publish   --target prod                                     # Power BI dataset refresh
+revintel run       --target local --generate                         # all stages
+```
 
-   # or load directly with write_pandas
-   python -m revintel.pipeline --target snowflake
-   ```
-5. **Power BI:** connect with [`powerbi/snowflake_source.pq`](powerbi/snowflake_source.pq), add the measures from [`powerbi/measures.dax`](powerbi/measures.dax), and follow [`powerbi/DASHBOARD_GUIDE.md`](powerbi/DASHBOARD_GUIDE.md).
+Or with Docker: `docker build -t revintel . && docker run --rm revintel`.
 
-## Power BI dashboards
+## Deploying to Azure + Snowflake
 
-| Page | Highlights |
-|---|---|
-| Executive Overview | Revenue, YoY %, active customers, AOV, LTV cards; revenue with rolling-3M trend; MoM growth |
-| Revenue Performance | Revenue by category, segment, country and channel; YTD waterfall |
-| Customer Segments & CLV | RFM segment mix, frequency × monetary scatter, top customers, CLV by acquisition channel |
-| Retention & Churn | Cohort retention heatmap, 90-day retention/churn trend, lifecycle mix, new vs returning |
-
-Key DAX: `Revenue YoY %` (`SAMEPERIODLASTYEAR`), `Revenue Rolling 3M` (`DATESINPERIOD`), `Revenue YTD` (`TOTALYTD`), `Customer Retention Rate MoM` (`INTERSECT` of current and prior-month buyers), `Revenue Share %` (`ALLSELECTED`), `Cohort Retention %`.
+1. **Infrastructure:** `az deployment group create -g rg-revintel-prod -f infra/azure/main.bicep -p infra/azure/main.bicepparam` creates the ADLS Gen2 lake, Key Vault, managed identity, Log Analytics and a scheduled Container Apps job.
+2. **Snowflake:** run [`sql/00_setup.sql`](sql/00_setup.sql) as an admin. It creates the warehouse, resource monitor, schemas, roles, key-pair service user, masking policy and Azure stage.
+3. **Secrets:** add `snowflake-private-key`, `powerbi-client-secret` and `alert-webhook-url` to Key Vault.
+4. **Orchestration:** deploy [`orchestration/airflow/dags/revintel_daily.py`](orchestration/airflow/dags/revintel_daily.py) to Airflow (image: this repo's Dockerfile), or rely on the Container Apps schedule.
+5. **CD:** set `DEPLOY_ENABLED=true`, `ACR_NAME` and the OIDC and Snowflake secrets for [`deploy.yml`](.github/workflows/deploy.yml).
+6. **Power BI:** follow [`powerbi/DASHBOARD_GUIDE.md`](powerbi/DASHBOARD_GUIDE.md). It covers the star-schema model, [`measures.dax`](powerbi/measures.dax) (~30 measures), [`rls_roles.dax`](powerbi/rls_roles.dax), four report pages and deployment pipelines.
 
 ## Project structure
 
 ```
-├── revintel/
-│   ├── generate_data.py     # synthetic multi-source extracts with injected quality issues
-│   ├── extract.py           # read CRM / ERP / catalog / finance files
-│   ├── transform.py         # Pandas + NumPy cleaning, dedup, quarantine
-│   ├── validate.py          # data-quality gate + reconciliation
-│   ├── azure_storage.py     # upload clean / archive / rejects layers to ADLS
-│   ├── snowflake_loader.py  # write_pandas or COPY INTO, then build models
-│   ├── local_warehouse.py   # DuckDB runner for the Snowflake SQL (sqlglot)
-│   └── pipeline.py          # CLI orchestrator
-├── sql/                     # 00 setup · 01 raw DDL · 02 Azure COPY · 03 core · 04 analytics
-├── powerbi/                 # DAX measures, Power Query source, theme, dashboard guide
-├── infra/azure/main.bicep   # ADLS Gen2 + lifecycle + scheduled Container Apps job
-├── tests/                   # unit + end-to-end tests
-├── Dockerfile
-└── .github/workflows/ci.yml
+├── revintel/                    # Python package + `revintel` CLI
+│   ├── generate_data.py         # synthetic multi-source extracts with injected defects
+│   ├── extract.py / transform.py / validate.py   # read → clean/quarantine → DQ gate
+│   ├── warehouse.py             # DuckDB & Snowflake adapters, idempotent batch loads, audit
+│   ├── azure_storage.py         # ADLS upload (managed identity, retries)
+│   ├── dbt_runner.py            # programmatic dbt invocation
+│   ├── powerbi.py               # dataset refresh via REST API
+│   ├── pipeline.py / cli.py     # stages with audit tracking; CLI entry point
+│   └── config.py / observability.py              # typed settings; JSON logs + alerts
+├── dbt/
+│   ├── models/staging/          # dedupe + type (views), sources with freshness SLAs
+│   ├── models/intermediate/     # currency conversion
+│   ├── models/marts/core/       # incremental facts, dims, SCD2 history, date dim
+│   ├── models/marts/analytics/  # revenue, CLV, cohorts, retention, RFM, KPIs
+│   ├── snapshots/ seeds/ tests/ macros/          # SCD2, RLS mapping, reconciliation tests
+│   └── models/exposures.yml     # Power BI dashboard lineage
+├── sql/                         # Snowflake platform setup, RAW DDL, ops queries
+├── orchestration/airflow/dags/  # daily DAG
+├── infra/azure/                 # Bicep: ADLS, Key Vault, identity, Container Apps job
+├── powerbi/                     # DAX measures, RLS, Power Query, theme, dashboard guide
+├── docs/                        # architecture + ADRs, runbook
+├── tests/                       # unit, warehouse, CLI, end-to-end, DAG integrity
+├── Dockerfile · Makefile · pyproject.toml · .pre-commit-config.yaml
+└── .github/workflows/           # CI (lint, test, dbt, airflow, docker) and CD
 ```

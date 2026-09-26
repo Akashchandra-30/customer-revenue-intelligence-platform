@@ -1,0 +1,87 @@
+version: 2
+
+models:
+  - name: stg_crm__customers
+    description: Current version of each CRM customer.
+    columns:
+      - name: customer_id
+        data_tests: [unique, not_null]
+      - name: email
+        description: PII - masked for non-engineering roles in Snowflake.
+        data_tests: [not_null]
+      - name: segment
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [Consumer, SMB, Enterprise]
+
+  - name: stg_erp__orders
+    description: Current state of each order after CDC deduplication.
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: customer_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_crm__customers')
+                field: customer_id
+      - name: status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [completed, refunded, cancelled]
+      - name: currency
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_finance__fx_rates')
+                field: currency
+      - name: discount_pct
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 0.5
+
+  - name: stg_erp__order_items
+    columns:
+      - name: order_item_id
+        data_tests: [unique, not_null]
+      - name: quantity
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1
+      - name: product_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_catalog__products')
+                field: product_id
+
+  - name: stg_catalog__products
+    columns:
+      - name: product_id
+        data_tests: [unique, not_null]
+
+  - name: stg_finance__fx_rates
+    columns:
+      - name: currency
+        data_tests: [unique, not_null]
+
+unit_tests:
+  - name: test_stg_orders_keeps_latest_cdc_delivery
+    description: A redelivered order (refund) must replace the original version.
+    model: stg_erp__orders
+    given:
+      - input: source('raw', 'orders')
+        rows:
+          - {order_id: SO1, status: completed, ingested_at: "2025-01-01 10:00:00", _loaded_at: "2025-01-01 11:00:00"}
+          - {order_id: SO1, status: refunded,  ingested_at: "2025-01-05 09:00:00", _loaded_at: "2025-01-05 10:00:00"}
+          - {order_id: SO2, status: completed, ingested_at: "2025-01-02 10:00:00", _loaded_at: "2025-01-02 11:00:00"}
+    expect:
+      rows:
+        - {order_id: SO1, status: refunded}
+        - {order_id: SO2, status: completed}

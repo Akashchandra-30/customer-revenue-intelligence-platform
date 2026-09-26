@@ -4,6 +4,7 @@ Every cleaner returns a ``CleanResult`` with the conformed rows, the rejected
 rows (with a ``reject_reason``) and how many duplicates were collapsed, so the
 pipeline can reconcile raw counts against clean + rejected + deduplicated.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -51,10 +52,13 @@ def clean_fx_rates(raw: pd.DataFrame) -> CleanResult:
     df = _strip(raw.copy(), ["currency"])
     df["currency"] = df["currency"].str.upper()
     df["rate_to_usd"] = pd.to_numeric(df["rate_to_usd"], errors="coerce")
-    df, rejects = _split(df, {
-        "missing_currency": df["currency"].isna(),
-        "invalid_rate": ~(df["rate_to_usd"] > 0),
-    })
+    df, rejects = _split(
+        df,
+        {
+            "missing_currency": df["currency"].isna(),
+            "invalid_rate": ~(df["rate_to_usd"] > 0),
+        },
+    )
     df, dupes = _dedupe(df, ["currency"])
     df["currency"] = df["currency"].astype(str)
     return CleanResult(df, rejects, dupes)
@@ -65,10 +69,13 @@ def clean_products(raw: pd.DataFrame) -> CleanResult:
     df["product_id"] = df["product_id"].str.upper()
     df["category"] = df["category"].str.title()
     df["list_price_usd"] = pd.to_numeric(df["list_price_usd"], errors="coerce").round(2)
-    df, rejects = _split(df, {
-        "missing_product_id": df["product_id"].isna(),
-        "invalid_price": ~(df["list_price_usd"] > 0),
-    })
+    df, rejects = _split(
+        df,
+        {
+            "missing_product_id": df["product_id"].isna(),
+            "invalid_price": ~(df["list_price_usd"] > 0),
+        },
+    )
     df, dupes = _dedupe(df, ["product_id"])
     return CleanResult(df, rejects, dupes)
 
@@ -87,15 +94,18 @@ def clean_customers(raw: pd.DataFrame) -> CleanResult:
     df["signup_date"] = pd.to_datetime(df["signup_date"], format="mixed", errors="coerce").dt.date
     df["updated_at"] = pd.to_datetime(df["updated_at"], errors="coerce")
 
-    df, rejects = _split(df, {
-        "missing_customer_id": df["customer_id"].isna(),
-        "invalid_email": ~df["email"].str.match(EMAIL_PATTERN),
-        "invalid_signup_date": df["signup_date"].isna(),
-        "unknown_segment": df["segment"].isna(),
-    })
-    # Keep the most recently updated version of each customer
+    df, rejects = _split(
+        df,
+        {
+            "missing_customer_id": df["customer_id"].isna(),
+            "invalid_email": ~df["email"].str.match(EMAIL_PATTERN),
+            "invalid_signup_date": df["signup_date"].isna(),
+            "unknown_segment": df["segment"].isna(),
+        },
+    )
+    # Keep the most recently updated version of each customer; updated_at drives the SCD2 snapshot
     df, dupes = _dedupe(df, ["customer_id"], order_by="updated_at")
-    return CleanResult(df.drop(columns="updated_at"), rejects, dupes)
+    return CleanResult(df, rejects, dupes)
 
 
 def clean_orders(raw: pd.DataFrame, valid_customer_ids: pd.Series, valid_currencies: pd.Series) -> CleanResult:
@@ -107,19 +117,22 @@ def clean_orders(raw: pd.DataFrame, valid_customer_ids: pd.Series, valid_currenc
     df["sales_channel"] = df["sales_channel"].str.lower().fillna("unknown")
     # Normalise to naive UTC so it maps cleanly to TIMESTAMP_NTZ
     df["order_ts"] = pd.to_datetime(df["order_ts"], format="mixed", utc=True, errors="coerce").dt.tz_convert(None)
-    df["ingested_at"] = pd.to_datetime(df["ingested_at"], format="mixed", utc=True, errors="coerce")
+    df["ingested_at"] = pd.to_datetime(df["ingested_at"], format="mixed", utc=True, errors="coerce").dt.tz_convert(None)
     df["discount_pct"] = pd.to_numeric(df["discount_pct"], errors="coerce").fillna(0).clip(0, 0.5)
 
-    df, rejects = _split(df, {
-        "missing_order_id": df["order_id"].isna(),
-        "missing_order_ts": df["order_ts"].isna(),
-        "invalid_status": ~df["status"].isin(VALID_STATUSES),
-        "unknown_currency": ~df["currency"].isin(valid_currencies),
-        "orphan_customer": ~df["customer_id"].isin(valid_customer_ids),
-    })
-    # CDC feed can redeliver an order; the latest delivery wins
+    df, rejects = _split(
+        df,
+        {
+            "missing_order_id": df["order_id"].isna(),
+            "missing_order_ts": df["order_ts"].isna(),
+            "invalid_status": ~df["status"].isin(VALID_STATUSES),
+            "unknown_currency": ~df["currency"].isin(valid_currencies),
+            "orphan_customer": ~df["customer_id"].isin(valid_customer_ids),
+        },
+    )
+    # CDC feed can redeliver an order; the latest delivery wins. ingested_at drives incremental models.
     df, dupes = _dedupe(df, ["order_id"], order_by="ingested_at")
-    return CleanResult(df.drop(columns="ingested_at"), rejects, dupes)
+    return CleanResult(df, rejects, dupes)
 
 
 def clean_order_items(raw: pd.DataFrame, valid_order_ids: pd.Series, valid_product_ids: pd.Series) -> CleanResult:
@@ -130,13 +143,16 @@ def clean_order_items(raw: pd.DataFrame, valid_order_ids: pd.Series, valid_produ
     df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").astype("Int64")
     df["unit_price"] = pd.to_numeric(df["unit_price"], errors="coerce").round(2)
 
-    df, rejects = _split(df, {
-        "orphan_order": ~df["order_id"].isin(valid_order_ids),
-        "unknown_product": ~df["product_id"].isin(valid_product_ids),
-        "missing_line_number": df["line_number"].isna(),
-        "non_positive_quantity": ~(df["quantity"] > 0),
-        "invalid_unit_price": ~(df["unit_price"] > 0),
-    })
+    df, rejects = _split(
+        df,
+        {
+            "orphan_order": ~df["order_id"].isin(valid_order_ids),
+            "unknown_product": ~df["product_id"].isin(valid_product_ids),
+            "missing_line_number": df["line_number"].isna(),
+            "non_positive_quantity": ~(df["quantity"] > 0),
+            "invalid_unit_price": ~(df["unit_price"] > 0),
+        },
+    )
     df, dupes = _dedupe(df, ["order_id", "line_number"])
     df["line_number"] = df["line_number"].astype(np.int64)
     df["quantity"] = df["quantity"].astype(np.int64)

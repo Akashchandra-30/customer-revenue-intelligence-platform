@@ -1,0 +1,14 @@
+version: 2
+
+seeds:
+  - name: security_country_access
+    description: >
+      Row-level security mapping for Power BI: which countries each user may see.
+      Maintained by Sales Ops via pull request (reviewed, versioned access control).
+    config:
+      schema: core
+    columns:
+      - name: user_email
+        data_tests: [not_null]
+      - name: country
+        data_tests: [not_null]
