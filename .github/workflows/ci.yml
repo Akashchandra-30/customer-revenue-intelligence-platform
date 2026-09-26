@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Unit + end-to-end tests (DuckDB runs the Snowflake SQL)
+        run: pytest -v
+      - name: Full local pipeline run
+        run: python -m revintel.pipeline --target local --generate --customers 2000
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-output
+          path: |
+            output/data_quality_report.json
+            output/powerbi/*.csv

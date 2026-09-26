@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# Generated data & outputs (reproducible via `python -m revintel.pipeline --generate`)
+data/
+output/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Power BI working files
+*.pbix.bak
+.pbi/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

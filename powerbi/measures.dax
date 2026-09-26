@@ -1,0 +1,121 @@
+// =============================================================================
+// Customer & Revenue Intelligence - DAX measures
+// Model: fct_orders, fct_order_items -> dim_customer, dim_product, 'Date'
+//        customer_ltv, rfm_segments (1:1 with dim_customer), cohort_retention
+// Create a "_Measures" table and paste each measure (Modeling > New measure).
+// =============================================================================
+
+// ---------- Date table (Modeling > New table), mark as date table -----------
+Date =
+VAR MinYear = YEAR ( MIN ( fct_orders[order_date] ) )
+VAR MaxYear = YEAR ( MAX ( fct_orders[order_date] ) )
+RETURN
+    ADDCOLUMNS (
+        CALENDAR ( DATE ( MinYear, 1, 1 ), DATE ( MaxYear, 12, 31 ) ),
+        "Year", YEAR ( [Date] ),
+        "Quarter", "Q" & QUARTER ( [Date] ),
+        "Month Number", MONTH ( [Date] ),
+        "Month", FORMAT ( [Date], "MMM" ),
+        "Year Month", FORMAT ( [Date], "YYYY-MM" ),
+        "Month Start", DATE ( YEAR ( [Date] ), MONTH ( [Date] ), 1 )
+    )
+
+// ---------- Revenue ---------------------------------------------------------
+Total Revenue = SUM ( fct_orders[net_revenue_usd] )
+
+Gross Sales = CALCULATE ( SUM ( fct_orders[gross_amount_usd] ), fct_orders[status] = "completed" )
+
+Total Discounts = CALCULATE ( SUM ( fct_orders[discount_amount_usd] ), fct_orders[status] = "completed" )
+
+Discount Rate % = DIVIDE ( [Total Discounts], [Gross Sales] )
+
+Completed Orders = CALCULATE ( COUNTROWS ( fct_orders ), fct_orders[status] = "completed" )
+
+Average Order Value = DIVIDE ( [Total Revenue], [Completed Orders] )
+
+Refund Rate % =
+DIVIDE (
+    CALCULATE ( COUNTROWS ( fct_orders ), fct_orders[status] = "refunded" ),
+    COUNTROWS ( fct_orders )
+)
+
+// ---------- Time intelligence ------------------------------------------------
+Revenue PM = CALCULATE ( [Total Revenue], DATEADD ( 'Date'[Date], -1, MONTH ) )
+
+Revenue MoM % = DIVIDE ( [Total Revenue] - [Revenue PM], [Revenue PM] )
+
+Revenue PY = CALCULATE ( [Total Revenue], SAMEPERIODLASTYEAR ( 'Date'[Date] ) )
+
+Revenue YoY % = DIVIDE ( [Total Revenue] - [Revenue PY], [Revenue PY] )
+
+Revenue YTD = TOTALYTD ( [Total Revenue], 'Date'[Date] )
+
+Revenue Rolling 3M =
+CALCULATE (
+    [Total Revenue],
+    DATESINPERIOD ( 'Date'[Date], MAX ( 'Date'[Date] ), -3, MONTH )
+)
+
+Revenue Share % =
+DIVIDE ( [Total Revenue], CALCULATE ( [Total Revenue], ALLSELECTED ( dim_customer ) ) )
+
+// ---------- Customers ----------------------------------------------------------
+Active Customers =
+CALCULATE ( DISTINCTCOUNT ( fct_orders[customer_id] ), fct_orders[status] = "completed" )
+
+New Customers =
+CALCULATE ( DISTINCTCOUNT ( fct_orders[customer_id] ), fct_orders[completed_order_seq] = 1 )
+
+Returning Customers = [Active Customers] - [New Customers]
+
+Revenue per Customer = DIVIDE ( [Total Revenue], [Active Customers] )
+
+// Customers who bought this period AND the previous month
+Retained Customers MoM =
+VAR CurrentBuyers =
+    CALCULATETABLE ( VALUES ( fct_orders[customer_id] ), fct_orders[status] = "completed" )
+VAR PriorBuyers =
+    CALCULATETABLE (
+        VALUES ( fct_orders[customer_id] ),
+        fct_orders[status] = "completed",
+        DATEADD ( 'Date'[Date], -1, MONTH )
+    )
+RETURN
+    COUNTROWS ( INTERSECT ( CurrentBuyers, PriorBuyers ) )
+
+Customer Retention Rate MoM =
+DIVIDE (
+    [Retained Customers MoM],
+    CALCULATE ( [Active Customers], DATEADD ( 'Date'[Date], -1, MONTH ) )
+)
+
+// ---------- Lifetime value & segmentation ---------------------------------------
+Avg Customer LTV = AVERAGE ( customer_ltv[total_revenue_usd] )
+
+Avg Predicted CLV 24M = AVERAGE ( customer_ltv[predicted_clv_24m_usd] )
+
+Repeat Purchase Rate % =
+DIVIDE (
+    CALCULATE ( COUNTROWS ( customer_ltv ), customer_ltv[orders] > 1 ),
+    COUNTROWS ( customer_ltv )
+)
+
+Churned Customers =
+CALCULATE ( COUNTROWS ( customer_ltv ), customer_ltv[lifecycle_status] = "Churned" )
+
+Churn Rate % = DIVIDE ( [Churned Customers], COUNTROWS ( customer_ltv ) )
+
+Top 10% Customer Revenue Share =
+DIVIDE (
+    CALCULATE ( SUM ( customer_ltv[total_revenue_usd] ), customer_ltv[revenue_percentile] >= 0.9 ),
+    SUM ( customer_ltv[total_revenue_usd] )
+)
+
+Champions Count = CALCULATE ( COUNTROWS ( rfm_segments ), rfm_segments[rfm_segment] = "Champions" )
+
+// ---------- Cohorts ------------------------------------------------------------
+// Use in a matrix: rows = cohort_month, columns = months_since_first
+Cohort Retention % =
+DIVIDE ( SUM ( cohort_retention[active_customers] ), SUM ( cohort_retention[cohort_customers] ) )
+
+Cohort Cumulative Revenue per Customer = MAX ( cohort_retention[cumulative_revenue_per_customer_usd] )
