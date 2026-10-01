@@ -1,5 +1,5 @@
 # ---- build stage: install dependencies and dbt packages ----
-FROM python:3.12-slim AS build
+FROM python:3.14-slim AS build
 
 WORKDIR /app
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -12,7 +12,7 @@ COPY dbt/ dbt/
 RUN /venv/bin/dbt deps --project-dir dbt --profiles-dir dbt
 
 # ---- runtime stage: slim image, non-root user ----
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 RUN useradd --create-home --uid 10001 revintel
 WORKDIR /app
